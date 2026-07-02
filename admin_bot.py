@@ -3,13 +3,13 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 from telethon import TelegramClient
 
 logging.basicConfig(level=logging.INFO)
 
-# Убираем пробелы, если они случайно попали в Railway
+# Очищаем переменные от пробелов, чтобы избежать ошибок
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_ID = os.getenv("API_ID", "").strip()
 API_HASH = os.getenv("API_HASH", "").strip()
@@ -28,21 +28,20 @@ async def start(message: Message):
 
 @dp.message(F.text == "🛠 Настроить аккаунты")
 async def start_login(message: Message, state: FSMContext):
-    await message.answer("Введи номер (с плюсом, например +1...):")
+    await message.answer("Введи номер (формат +1234567890):")
     await state.set_state(LoginStates.waiting_for_num)
 
 @dp.message(LoginStates.waiting_for_num)
 async def process_num(message: Message, state: FSMContext):
     phone = message.text
     if not os.path.exists("sessions"): os.makedirs("sessions")
-    
-    # Используем API_ID и HASH прямо здесь
     try:
+        # Пытаемся подключиться
         client = TelegramClient("sessions/session_1", int(API_ID), API_HASH)
         await client.connect()
         await client.send_code_request(phone)
         await state.update_data(client=client, phone=phone)
-        await message.answer("Код отправлен. Введи его:")
+        await message.answer("Код отправлен в твой оф. Telegram. Введи его:")
         await state.set_state(LoginStates.waiting_for_code)
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
