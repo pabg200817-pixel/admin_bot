@@ -1,124 +1,92 @@
-import asyncio
-import os
-import random
+import asyncio, os
 from aiogram import Bot, Dispatcher, F
-from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
-from aiogram.fsm.storage.memory import MemoryStorage
-
 from telethon import TelegramClient
-from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
-# ================= НАСТРОЙКИ =================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+# Инициализация
+bot = Bot(token=os.getenv("BOT_TOKEN"))
+dp = Dispatcher()
 
-GROUPS_COUNT = 4
-DELAY_INVITE = 3
-# =============================================
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-
-class SetupPipeline(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_photo = State()
-    waiting_for_main_targets = State()
-    waiting_for_phone = State()
-    waiting_for_tg_code = State()
+class LoginStates(StatesGroup):
+    waiting_for_num = State()
+    waiting_for_code = State()
     waiting_for_password = State()
 
-def get_admin_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Сбросить текущий процесс")]],
-        resize_keyboard=True
-    )
-
-@dp.message(F.text == "❌ Сбросить текущий процесс")
-async def cmd_reset(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🗑️ Процесс сброшен. Начни заново командой /start")
+main_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🛠 Настроить аккаунты")]], resize_keyboard=True)
 
 @dp.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("⚙️ Бот готов к работе.\nШаг 1: Напиши название для групп:", reply_markup=get_admin_keyboard())
-    await state.set_state(SetupPipeline.waiting_for_name)
+async def start(message: Message):
+    await message.answer("Ну чё, готов к работе? Жми кнопку и погнали, фермер:", reply_markup=main_kb)
 
-@dp.message(SetupPipeline.waiting_for_name)
-async def process_name(message: Message, state: FSMContext):
-    await state.update_data(group_name=message.text)
-    await message.answer("🖼️ Шаг 2: Скинь картинку для аватарки чатов:")
-    await state.set_state(SetupPipeline.waiting_for_photo)
+@dp.message(F.text == "🛠 Настроить аккаунты")
+async def start_login(message: Message, state: FSMContext):
+    await message.answer("Давай номер 1-го аккаунта США (с плюсом, например +1...):")
+    await state.update_data(count=1)
+    await state.set_state(LoginStates.waiting_for_num)
 
-@dp.message(SetupPipeline.waiting_for_photo, F.photo)
-async def process_photo(message: Message, state: FSMContext):
-    # Сохраняем фото с уникальным именем для пользователя
-    photo_path = f"avatar_{message.from_user.id}.jpg"
-    await bot.download(message.photo[-1], destination=photo_path)
-    await state.update_data(photo_path=photo_path)
+@dp.message(LoginStates.waiting_for_num)
+async def process_num(message: Message, state: FSMContext):
+    if not os.path.exists("sessions"): os.makedirs("sessions")
+    data = await state.get_data()
+    count = data['count']
+    phone = message.text
     
-    await message.answer("👥 Шаг 3: Скинь список НОМЕРОВ ТЕЛЕФОНОВ (по одному в строке, с плюсом):")
-    await state.set_state(SetupPipeline.waiting_for_main_targets)
-
-@dp.message(SetupPipeline.waiting_for_main_targets)
-async def process_targets(message: Message, state: FSMContext):
-    targets = [line.strip() for line in message.text.split("\n") if line.strip()]
-    await state.update_data(main_targets=targets)
-    await message.answer("📱 Шаг 4: Скинь номер телефона рабочего аккаунта (с плюсом):")
-    await state.set_state(SetupPipeline.waiting_for_phone)
-
-@dp.message(SetupPipeline.waiting_for_phone)
-async def process_phone(message: Message, state: FSMContext):
-    phone = message.text.strip()
-    await state.update_data(phone=phone)
-    
-    session_name = f"session_{phone.replace('+', '')}"
-    client = TelegramClient(session_name, API_ID, API_HASH)
+    # Создаем клиента
+    client = TelegramClient(f"sessions/session_{count}", int(os.getenv("API_ID")), os.getenv("API_HASH"))
     await client.connect()
     
-    if await client.is_user_authorized():
-        await message.answer("✅ Аккаунт уже авторизован. Создаю группы...")
-        await create_groups_logic(message, state, client)
-    else:
-        await client.send_code_request(phone)
-        # Сохраняем клиента в стейт, чтобы потом использовать
-        await state.update_data(client=client)
-        await message.answer(f"📩 Пиши код подтверждения:")
-        await state.set_state(SetupPipeline.waiting_for_tg_code)
-
-@dp.message(SetupPipeline.waiting_for_tg_code)
-async def process_tg_code(message: Message, state: FSMContext):
-    data = await state.get_data()
-    client = data['client']
     try:
-        await client.sign_in(data['phone'], message.text.strip())
-        await message.answer("✅ Успешно! Создаю группы...")
-        await create_groups_logic(message, state, client)
-    except SessionPasswordNeededError:
-        await message.answer("🔒 Нужен облачный пароль:")
-        await state.set_state(SetupPipeline.waiting_for_password)
+        await client.send_code_request(phone)
+        await state.update_data(current_client=client, current_phone=phone)
+        await message.answer("Код улетел. Пиши его сюда, не тупи:")
+        await state.set_state(LoginStates.waiting_for_code)
+    except Exception as e:
+        await message.answer(f"Ебать, какая-то хуйня при отправке кода: {e}")
 
-async def create_groups_logic(message: Message, state: FSMContext, client: TelegramClient):
+@dp.message(LoginStates.waiting_for_code)
+async def process_code(message: Message, state: FSMContext):
     data = await state.get_data()
-    target_phones = data.get("main_targets", [])
-    group_name = data.get("group_name", "Group")
-    
-    for i in range(GROUPS_COUNT):
-        name = f"{group_name} {random.randint(100, 999)}"
-        group = (await client(CreateChannelRequest(title=name, about="", megagroup=True))).chats[0]
-        if target_phones:
-            await client(InviteToChannelRequest(group, target_phones))
-        await message.answer(f"📦 Группа {name} создана.")
-        await asyncio.sleep(DELAY_INVITE)
-        
-    await client.disconnect()
-    await message.answer("🎉 Готово! Конвейер завершил работу.")
-    await state.clear()
+    client = data['current_client']
+    try:
+        await client.sign_in(data['current_phone'], message.text)
+        await finish_login(message, state, client, data['count'])
+    except PhoneCodeInvalidError:
+        await message.answer("Хуйню ввел, код неверный! Пиши еще раз, внимательнее:")
+    except SessionPasswordNeededError:
+        await message.answer("На акке стоит облачный пароль, вводи его, умник:")
+        await state.set_state(LoginStates.waiting_for_password)
 
-async def main(): await dp.start_polling(bot)
-if __name__ == "__main__": asyncio.run(main())
+@dp.message(LoginStates.waiting_for_password)
+async def process_password(message: Message, state: FSMContext):
+    data = await state.get_data()
+    client = data['current_client']
+    try:
+        await client.sign_in(password=message.text)
+        await finish_login(message, state, client, data['count'])
+    except PasswordHashInvalidError:
+        await message.answer("Да ты заебал, пароль неверный! Пробуй еще раз:")
+
+async def finish_login(message, state, client, count):
+    await client.disconnect()
+    if count < 5:
+        await state.update_data(count=count + 1)
+        await message.answer(f"✅ Аккаунт {count} привязал. Давай номер {count + 1}-го:")
+        await state.set_state(LoginStates.waiting_for_num)
+    elif count == 5:
+        await message.answer("Все 5 рабочих готовы. Остался последний — ТЕХНИЧКА! Давай её номер:")
+        await state.update_data(count=6)
+        await state.set_state(LoginStates.waiting_for_num)
+    else:
+        await message.answer("🎉 Всё готово, ферма настроена! Можешь идти пить пиво.")
+        await state.clear()
+
+async def main(): 
+    print("Бот запущен...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__": 
+    asyncio.run(main())
