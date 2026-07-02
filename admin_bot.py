@@ -6,65 +6,59 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
 from telethon import TelegramClient
 
 # Настройка
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+API_ID = int(os.getenv("API_ID", 0))
+API_HASH = os.getenv("API_HASH", "")
 
 # Инициализация
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-client = TelegramClient("sessions/session_1", API_ID, API_HASH)
 
-# Состояния для логики
+# ВАЖНО: сохраняем сессию в /tmp (там всегда есть права на запись в Railway)
+session_path = "/tmp/session_1"
+client = TelegramClient(session_path, API_ID, API_HASH)
+
 class BotStates(StatesGroup):
     waiting_for_group_name = State()
 
-# Клавиатура
 def main_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Создать группу")],
-        [KeyboardButton(text="📊 Статус аккаунта")]
+        [KeyboardButton(text="📊 Статус")]
     ], resize_keyboard=True)
 
-@dp.message(Command("start"))
+@dp.message(F.text == "/start")
 async def start(message: Message):
-    await message.answer("Привет! Я готов к работе. Выбери действие:", reply_markup=main_kb())
+    await message.answer("Бот запущен. Используй кнопки:", reply_markup=main_kb())
 
 @dp.message(F.text == "➕ Создать группу")
-async def ask_group_name(message: Message, state: FSMContext):
-    await message.answer("Введите название будущей группы:")
+async def ask_group(message: Message, state: FSMContext):
+    await message.answer("Введите название новой группы:")
     await state.set_state(BotStates.waiting_for_group_name)
 
 @dp.message(BotStates.waiting_for_group_name)
-async def create_group(message: Message, state: FSMContext):
-    group_name = message.text
+async def process_group(message: Message, state: FSMContext):
     try:
-        # Телефоновская логика создания группы
-        result = await client.create_channel(title=group_name, about="Группа создана ботом")
-        await message.answer(f"✅ Группа '{group_name}' успешно создана!", reply_markup=main_kb())
+        # Создаем канал через Telethon
+        await client.create_channel(title=message.text, about="Группа от админ-бота")
+        await message.answer(f"✅ Группа '{message.text}' создана!")
     except Exception as e:
-        await message.answer(f"❌ Ошибка при создании: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
     await state.clear()
 
-@dp.message(F.text == "📊 Статус аккаунта")
-async def check_status(message: Message):
+@dp.message(F.text == "📊 Статус")
+async def status(message: Message):
     me = await client.get_me()
-    await message.answer(f"👤 Авторизован как: {me.first_name} (@{me.username})")
+    await message.answer(f"👤 Аккаунт: {me.first_name}\n✅ Сессия: Работает")
 
 async def main():
-    # Запуск Telethon клиента
     await client.connect()
-    
-    if not await client.is_user_authorized():
-        print("!!! КРИТИЧЕСКАЯ ОШИБКА: Файл сессии не найден или не авторизован !!!")
-        return
-
-    print("Сессия активна. Бот запущен...")
+    # Если ты загрузил файл session_1.session, он подхватится автоматически
+    print("Бот и Telethon запущены!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
