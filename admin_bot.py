@@ -8,7 +8,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from telethon import TelegramClient
 from telethon.tl.functions.channels import CreateChannelRequest
 
-# Настройка логов
+# Инициализация
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID", 0))
@@ -17,27 +17,26 @@ API_HASH = os.getenv("API_HASH", "")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ВАЖНО: используем папку /tmp для сессий
+# Используем /tmp для хранения сессий — это единственное место, 
+# где Railway позволяет записывать файлы базы данных сессии
 clients = {}
 
 def get_client(name):
     if name not in clients:
-        # Сессия будет сохранена как файл в /tmp/accN
+        # Имя файла будет /tmp/acc1.session и т.д.
         clients[name] = TelegramClient(f"/tmp/{name}", API_ID, API_HASH)
     return clients[name]
 
 class BotStates(StatesGroup):
     waiting_for_group_name = State()
 
-def main_kb():
-    return ReplyKeyboardMarkup(keyboard=[
+@dp.message(F.text == "/start")
+async def start(message: Message):
+    kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📱 Выбрать аккаунт")],
         [KeyboardButton(text="➕ Создать группу")]
     ], resize_keyboard=True)
-
-@dp.message(F.text == "/start")
-async def start(message: Message):
-    await message.answer("Бот запущен. Выберите аккаунт (напишите acc1, acc2...):", reply_markup=main_kb())
+    await message.answer("Бот запущен. Выберите аккаунт (напишите acc1, acc2...):", reply_markup=kb)
 
 @dp.message(F.text.startswith("acc"))
 async def set_acc(message: Message, state: FSMContext):
@@ -60,8 +59,9 @@ async def process_group(message: Message, state: FSMContext):
     client = get_client(acc_name)
     
     try:
-        # Правильный вызов API для создания канала
-        await client.start()
+        # Подключаемся только в момент действия
+        await client.connect()
+        # ПРАВИЛЬНЫЙ ВЫЗОВ создания канала
         await client(CreateChannelRequest(title=message.text, about="Группа от бота"))
         await message.answer(f"✅ Группа '{message.text}' успешно создана через {acc_name}")
     except Exception as e:
