@@ -17,11 +17,11 @@ API_HASH = os.getenv("API_HASH", "")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Словарь для хранения активных клиентов
+# Хранилище клиентов
 clients = {}
 
 def get_client(name):
-    # Создает сессию для конкретного имени (например, 'acc1', 'acc2'...)
+    # Файлы сессий ищем в /tmp/ (там есть права на запись)
     if name not in clients:
         clients[name] = TelegramClient(f"/tmp/{name}", API_ID, API_HASH)
     return clients[name]
@@ -33,26 +33,25 @@ class BotStates(StatesGroup):
 @dp.message(F.text == "/start")
 async def start(message: Message):
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="📱 Управление аккаунтами")],
+        [KeyboardButton(text="📱 Выбрать аккаунт")],
         [KeyboardButton(text="➕ Создать группу")]
     ], resize_keyboard=True)
-    await message.answer("Бот готов к работе с несколькими аккаунтами.", reply_markup=kb)
+    await message.answer("Бот запущен. Выберите аккаунт для управления.", reply_markup=kb)
 
-@dp.message(F.text == "📱 Управление аккаунтами")
+@dp.message(F.text == "📱 Выбрать аккаунт")
 async def show_accounts(message: Message):
-    await message.answer("Выберите аккаунт (acc1, acc2... acc6):")
+    await message.answer("Напишите имя аккаунта (например: acc1, acc2...):")
 
-@dp.message(F.text.startswith("acc"))
+@dp.message(F.text.regexp(r'acc[1-6]'))
 async def select_acc(message: Message, state: FSMContext):
-    acc_name = message.text
-    await state.update_data(current_acc=acc_name)
-    await message.answer(f"Аккаунт {acc_name} выбран.")
+    await state.update_data(current_acc=message.text)
+    await message.answer(f"✅ Аккаунт {message.text} выбран.")
 
 @dp.message(F.text == "➕ Создать группу")
 async def ask_group(message: Message, state: FSMContext):
     data = await state.get_data()
     if 'current_acc' not in data:
-        await message.answer("Сначала выберите аккаунт (напишите acc1, acc2 и т.д.)")
+        await message.answer("⚠️ Сначала выберите аккаунт!")
         return
     await message.answer("Введите название группы:")
     await state.set_state(BotStates.waiting_for_group_name)
@@ -64,14 +63,17 @@ async def process_group(message: Message, state: FSMContext):
     client = get_client(acc_name)
     
     try:
-        await client.connect()
+        if not client.is_connected():
+            await client.connect()
+            
         await client(CreateChannelRequest(title=message.text, about="Группа от бота"))
-        await message.answer(f"✅ Группа создана через {acc_name}")
+        await message.answer(f"✅ Группа '{message.text}' создана через {acc_name}")
     except Exception as e:
-        await message.answer(f"❌ Ошибка {acc_name}: {e}")
+        await message.answer(f"❌ Ошибка {acc_name}: {str(e)}")
     await state.clear()
 
 async def main():
+    print("Бот запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
