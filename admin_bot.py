@@ -1,5 +1,5 @@
-import asyncio
 import os
+import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.context import FSMContext
@@ -9,64 +9,62 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 from telethon import TelegramClient
 
+# Настройка
 logging.basicConfig(level=logging.INFO)
+TOKEN = os.getenv("BOT_TOKEN")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
-API_ID = int(os.getenv("API_ID", "0").strip())
-API_HASH = os.getenv("API_HASH", "").strip()
-
+# Инициализация
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+client = TelegramClient("sessions/session_1", API_ID, API_HASH)
 
-class LoginStates(StatesGroup):
-    waiting_for_num = State()
-    waiting_for_code = State()
+# Состояния для логики
+class BotStates(StatesGroup):
+    waiting_for_group_name = State()
+
+# Клавиатура
+def main_kb():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="➕ Создать группу")],
+        [KeyboardButton(text="📊 Статус аккаунта")]
+    ], resize_keyboard=True)
 
 @dp.message(Command("start"))
 async def start(message: Message):
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🛠 Настроить аккаунты")]], resize_keyboard=True)
-    await message.answer("Бот готов. Нажми кнопку для авторизации:", reply_markup=kb)
+    await message.answer("Привет! Я готов к работе. Выбери действие:", reply_markup=main_kb())
 
-@dp.message(F.text == "🛠 Настроить аккаунты")
-async def start_login(message: Message, state: FSMContext):
-    await message.answer("Введи номер с плюсом (например +1...):")
-    await state.set_state(LoginStates.waiting_for_num)
+@dp.message(F.text == "➕ Создать группу")
+async def ask_group_name(message: Message, state: FSMContext):
+    await message.answer("Введите название будущей группы:")
+    await state.set_state(BotStates.waiting_for_group_name)
 
-@dp.message(LoginStates.waiting_for_num)
-async def process_num(message: Message, state: FSMContext):
-    phone = message.text
-    if not os.path.exists("sessions"): os.makedirs("sessions")
-    
-    # Создаем клиента с эмуляцией Android устройства
-    client = TelegramClient("sessions/session_1", API_ID, API_HASH, 
-                            device_model="Pixel 7", 
-                            system_version="Android 13")
-    
-    await client.connect()
+@dp.message(BotStates.waiting_for_group_name)
+async def create_group(message: Message, state: FSMContext):
+    group_name = message.text
     try:
-        sent = await client.send_code_request(phone)
-        await state.update_data(client=client, phone=phone, phone_code_hash=sent.phone_code_hash)
-        await message.answer("✅ Запрос ушел! Проверь официальный Telegram (чат с Telegram). Введи код:")
-        await state.set_state(LoginStates.waiting_for_code)
-        print(f"DEBUG: Код успешно запрошен для {phone}")
+        # Телефоновская логика создания группы
+        result = await client.create_channel(title=group_name, about="Группа создана ботом")
+        await message.answer(f"✅ Группа '{group_name}' успешно создана!", reply_markup=main_kb())
     except Exception as e:
-        await message.answer(f"❌ ОШИБКА: {str(e)}")
-        print(f"DEBUG CRITICAL: {e}")
+        await message.answer(f"❌ Ошибка при создании: {e}")
+    await state.clear()
 
-@dp.message(LoginStates.waiting_for_code)
-async def process_code(message: Message, state: FSMContext):
-    data = await state.get_data()
-    client = data['client']
-    try:
-        await client.sign_in(data['phone'], message.text, phone_code_hash=data['phone_code_hash'])
-        await message.answer("✅ Успешно! Аккаунт привязан.")
-        await client.disconnect()
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ ОШИБКА КОДА: {str(e)}")
-        print(f"DEBUG CODE ERROR: {e}")
+@dp.message(F.text == "📊 Статус аккаунта")
+async def check_status(message: Message):
+    me = await client.get_me()
+    await message.answer(f"👤 Авторизован как: {me.first_name} (@{me.username})")
 
 async def main():
+    # Запуск Telethon клиента
+    await client.connect()
+    
+    if not await client.is_user_authorized():
+        print("!!! КРИТИЧЕСКАЯ ОШИБКА: Файл сессии не найден или не авторизован !!!")
+        return
+
+    print("Сессия активна. Бот запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
